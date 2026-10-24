@@ -158,6 +158,11 @@ function renderDetail() {
     '<p><span class="k">Última lectura</span><span>' + new Date(a.ts).toLocaleTimeString('es-ES') + '</span></p>';
 }
 
+function fmtTiempo(min) {
+  const m = Math.round(min || 0);
+  return m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : m + ' min';
+}
+
 function renderStats(s) {
   const act = Object.entries(s.actividad).map(([k, v]) => k + ' ' + v).join(', ') || '-';
   $('stats').innerHTML =
@@ -166,7 +171,7 @@ function renderStats(s) {
     '<p><span class="k">Tiempo fuera</span><span>' + s.minutosFuera + ' min</span></p>' +
     '<p><span class="k">Batería mín / máx</span><span>' + (s.bateriaMin == null ? '-' : Math.round(s.bateriaMin) + '% / ' + Math.round(s.bateriaMax) + '%') + '</span></p>' +
     '<p><span class="k">Temperatura media</span><span>' + (s.temperaturaMedia ?? '-') + ' °C</span></p>' +
-    '<p><span class="k">Lecturas</span><span>' + s.lecturas + '</span></p>' +
+    '<p><span class="k">Tiempo en funcionamiento</span><span>' + fmtTiempo(s.minutosFuncionando) + '</span></p>' +
     '<p><span class="k">Actividad</span><span style="text-align:right">' + act + '</span></p>';
 }
 
