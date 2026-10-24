@@ -1,0 +1,13 @@
+{
+  "name": "control-bisontes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor de control de bisontes (demo con simulador)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js --sim"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
