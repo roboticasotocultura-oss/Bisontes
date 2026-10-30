@@ -3,9 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Control de bisontes</title>
+<title>BISONTECH</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root{--bg:#f6f6f4;--card:#fff;--text:#1f1f1e;--muted:#6b6b68;--border:#e2e2de;--ok:#3B6D11;--bad:#A32D2D;--accent:#185FA5;--sun:#BA7517}
 @media (prefers-color-scheme: dark){:root{--bg:#1c1c1b;--card:#262624;--text:#eeeeea;--muted:#a3a39e;--border:#3a3a37;--ok:#97C459;--bad:#F09595;--accent:#85B7EB;--sun:#FAC775}}
@@ -14,11 +15,16 @@ html,body{margin:0;height:100%;font-family:system-ui,-apple-system,sans-serif;ba
 #app{display:flex;height:100vh}
 #side{width:310px;flex:0 0 310px;border-right:1px solid var(--border);background:var(--card);overflow:auto;padding:14px}
 #map{position:absolute;inset:0;left:310px}
-h1{font-size:18px;font-weight:500;margin:0 0 12px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.brand img{height:36px;width:auto;display:block}
+.brand h1{font-size:20px;font-weight:600;letter-spacing:.5px;margin:0;color:var(--ok)}
 h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 .btn{font:inherit;font-size:13px;padding:7px 11px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;cursor:pointer;margin:0 6px 6px 0}
 .btn:hover{border-color:var(--accent)}
-.btn.on{border-color:var(--accent);color:var(--accent)}
+.btn.blue{border-color:var(--accent);color:var(--accent)}
+.btn.red{border-color:var(--bad);color:var(--bad)}
+.btn.blue.on{background:var(--accent);color:#fff}
+.btn.red.on{background:var(--bad);color:#fff}
 .btn:disabled{opacity:.4;cursor:default}
 .cow{padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
 .cow:hover,.cow.sel{border-color:var(--accent)}
@@ -33,6 +39,8 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 .warn{color:var(--bad);font-weight:500}
 .log{font-size:12px;color:var(--muted);line-height:1.6}
 .hint{font-size:12px;color:var(--muted);margin:4px 0 0}
+.chart-box{position:relative;height:150px;margin-bottom:6px}
+.cap{font-size:12px;color:var(--muted);margin:10px 0 2px}
 .pin{width:32px;height:32px;border-radius:50%;background:var(--ok);color:#fff;font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
 .pin.alert{background:var(--bad)}
 .pin.sel{outline:3px solid var(--accent)}
@@ -43,11 +51,22 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 <body>
 <div id="app">
   <div id="side">
-    <h1>Control de bisontes</h1>
-    <button class="btn" id="btnDraw">Dibujar zona</button>
-    <button class="btn" id="btnClose" disabled>Cerrar zona</button>
-    <button class="btn" id="btnClear">Borrar zona</button>
-    <p class="hint" id="hint">Pulsa "Dibujar zona" y marca los vértices en el mapa.</p>
+    <div class="brand">
+      <img id="logo" src="/logo.png" alt="" onerror="this.style.display='none'">
+      <h1>BISONTECH</h1>
+    </div>
+
+    <h2>Zonas</h2>
+    <div>
+      <button class="btn blue" id="btnDrawOk">Zona permitida (azul)</button>
+      <button class="btn red" id="btnDrawBad">Zona prohibida (roja)</button>
+      <button class="btn" id="btnClose" disabled>Cerrar zona</button>
+    </div>
+    <div>
+      <button class="btn blue" id="btnClear">Borrar zona azul</button>
+      <button class="btn red" id="btnClearBad">Borrar zonas rojas</button>
+    </div>
+    <p class="hint" id="hint">Elige el tipo de zona y marca los vértices en el mapa.</p>
 
     <h2>Bisonte seleccionado</h2>
     <div id="detail" class="card"><span class="k">Pincha un bisonte en el mapa o en la lista.</span></div>
@@ -55,6 +74,22 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 
     <h2>Últimas 24 h</h2>
     <div id="stats" class="card"><span class="k">Selecciona un bisonte.</span></div>
+
+    <h2 id="selTitle">Gráficas del bisonte</h2>
+    <p class="cap">Batería (%)</p>
+    <div class="chart-box"><canvas id="cBat"></canvas></div>
+    <p class="cap">Temperatura (°C)</p>
+    <div class="chart-box"><canvas id="cTemp"></canvas></div>
+    <p class="cap">Actividad (minutos)</p>
+    <div class="chart-box"><canvas id="cAct"></canvas></div>
+
+    <h2>Gráficas generales</h2>
+    <p class="cap">Distancia recorrida (km, 24 h)</p>
+    <div class="chart-box"><canvas id="cDist"></canvas></div>
+    <p class="cap">Dentro / fuera de la zona (min, 24 h)</p>
+    <div class="chart-box"><canvas id="cZona"></canvas></div>
+    <p class="cap">Batería actual por bisonte (%)</p>
+    <div class="chart-box"><canvas id="cBatAll"></canvas></div>
 
     <h2>Bisontes</h2>
     <div id="list"></div>
@@ -69,6 +104,8 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 
 <script>
 const CENTER = [40.752802421187845, -3.8113048447402043];
+const COLOR_OK = '#185FA5', COLOR_BAD = '#A32D2D';
+
 const map = L.map('map').setView(CENTER, 16);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom: 19, attribution: 'Imágenes © Esri'}).addTo(map);
 setTimeout(() => map.invalidateSize(), 100);
@@ -82,9 +119,10 @@ const api = async (url, opt) => {
 };
 
 let animales = [], zona = null, zonaLayer = null, zonaKey = '';
+let prohibidas = [], prohLayers = [], prohKey = '';
 let selected = null, lastStats = 0;
-let drawing = false, drawPts = [], drawLine = null;
-const markers = {}, trails = {}, prevDentro = {};
+let drawing = null, drawPts = [], drawLine = null;   // drawing: 'ok' | 'bad' | null
+const markers = {}, trails = {}, prevDentro = {}, prevProh = {};
 const logs = [];
 
 function estaDentro(lat, lng, poly) {
@@ -96,12 +134,30 @@ function estaDentro(lat, lng, poly) {
   return inside;
 }
 
-function realHour() { const d = new Date(); return d.getHours() + d.getMinutes() / 60; }
-function sunFactor(h) { const s = Math.sin(Math.PI * (h - 6) / 14); return s > 0 ? s : 0; }
+// Altura del sol en la finca (seno del ángulo). > 0 = de día. Misma fórmula que el servidor.
+function sinElevacion(ts) {
+  const rad = x => x * Math.PI / 180;
+  const d = new Date(ts);
+  const dayStart = Date.UTC(d.getUTCFullYear(), 0, 0);
+  const N = (ts - dayStart) / 86400000;
+  const g = 2 * Math.PI * (N - 1) / 365;
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g)
+    - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
+    - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g)
+    - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const minUTC = d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+  const tst = minUTC + eqt + 4 * CENTER[1];
+  const ha = rad(tst / 4 - 180);
+  const lat = rad(CENTER[0]);
+  return Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha);
+}
 
 function estadoCarga(bat) {
   if (bat >= 99.5) return 'Llena';
-  return sunFactor(realHour()) > 0.05 ? '<span style="color:var(--sun)">Cargando (sol)</span>' : 'Descargando (noche)';
+  return sinElevacion(Date.now()) > 0
+    ? '<span style="color:var(--sun)">Cargando (sol)</span>'
+    : 'Descargando (noche)';
 }
 
 function addLog(m) {
@@ -120,20 +176,26 @@ function banner(m) {
 }
 
 const fueraDeZona = a => zona && a.dentro === 0;
+const enAlerta = a => fueraDeZona(a) || !!a.enProhibida;
 
 function pinIcon(a) {
-  const cls = ['pin', fueraDeZona(a) ? 'alert' : '', selected === a.animal ? 'sel' : ''].join(' ');
+  const cls = ['pin', enAlerta(a) ? 'alert' : '', selected === a.animal ? 'sel' : ''].join(' ');
   return L.divIcon({className: '', html: '<div class="' + cls + '">' + a.animal + '</div>', iconSize: [32, 32], iconAnchor: [16, 16]});
 }
 
 function drawZona() {
   if (zonaLayer) { map.removeLayer(zonaLayer); zonaLayer = null; }
-  if (zona) zonaLayer = L.polygon(zona, {color: '#185FA5', weight: 2, fillOpacity: 0.12}).addTo(map);
+  if (zona) zonaLayer = L.polygon(zona, {color: COLOR_OK, weight: 2, fillOpacity: 0.12}).addTo(map);
+}
+
+function drawProhibidas() {
+  prohLayers.forEach(l => map.removeLayer(l));
+  prohLayers = prohibidas.map(z => L.polygon(z.puntos, {color: COLOR_BAD, weight: 2, fillOpacity: 0.25}).addTo(map));
 }
 
 function renderList() {
   $('list').innerHTML = animales.map(a =>
-    '<div class="cow ' + (fueraDeZona(a) ? 'alert' : '') + ' ' + (a.animal === selected ? 'sel' : '') + '" onclick="select(' + a.animal + ')">' +
+    '<div class="cow ' + (enAlerta(a) ? 'alert' : '') + ' ' + (a.animal === selected ? 'sel' : '') + '" onclick="select(' + a.animal + ')">' +
     '<span><span class="dot"></span>Bisonte ' + a.animal + '</span>' +
     '<span style="font-size:12px;color:var(--muted)">' + Math.round(a.bateria) + '%</span></div>'
   ).join('') || '<span class="k">Sin bisontes todavía.</span>';
@@ -144,6 +206,8 @@ function renderDetail() {
   if (!a) { $('detail').innerHTML = '<span class="k">Pincha un bisonte en el mapa o en la lista.</span>'; return; }
   const bat = Math.round(a.bateria);
   const zonaTxt = !zona ? 'Sin zona definida' : (a.dentro ? 'Dentro de la zona' : '<span class="warn">Fuera de la zona</span>');
+  const rojaTxt = a.enProhibida ? '<span class="warn">Dentro de zona prohibida</span>'
+    : (prohibidas.length ? 'Fuera' : 'Sin zonas prohibidas');
   $('detail').innerHTML =
     '<p><span class="k">Animal</span><span>Bisonte ' + a.animal + '</span></p>' +
     '<p><span class="k">Batería</span><span>' + bat + '%</span></p>' +
@@ -154,7 +218,8 @@ function renderDetail() {
     '<p><span class="k">Latitud</span><span>' + a.lat.toFixed(6) + '</span></p>' +
     '<p><span class="k">Longitud</span><span>' + a.lng.toFixed(6) + '</span></p>' +
     '<p><span class="k">Zona</span><span>' + zonaTxt + '</span></p>' +
-    '<p><span class="k">Vibración</span><span>' + (fueraDeZona(a) ? '<span class="warn">Activa</span>' : 'No') + '</span></p>' +
+    '<p><span class="k">Zona prohibida</span><span>' + rojaTxt + '</span></p>' +
+    '<p><span class="k">Vibración</span><span>' + (enAlerta(a) ? '<span class="warn">Activa</span>' : 'No') + '</span></p>' +
     '<p><span class="k">Última lectura</span><span>' + new Date(a.ts).toLocaleTimeString('es-ES') + '</span></p>';
 }
 
@@ -164,15 +229,112 @@ function fmtTiempo(min) {
 }
 
 function renderStats(s) {
-  const act = Object.entries(s.actividad).map(([k, v]) => k + ' ' + v).join(', ') || '-';
+  const act = Object.entries(s.actividad).sort((x, y) => y[1] - x[1]);
+  const actHtml = act.length
+    ? act.map(([k, v]) => '<p style="padding-left:12px"><span class="k">' + k + '</span><span>' + fmtTiempo(v) + '</span></p>').join('')
+    : '<p><span class="k">Sin datos de actividad</span><span>-</span></p>';
   $('stats').innerHTML =
     '<p><span class="k">Distancia</span><span>' + s.distanciaKm + ' km</span></p>' +
-    '<p><span class="k">Tiempo dentro</span><span>' + s.minutosDentro + ' min</span></p>' +
-    '<p><span class="k">Tiempo fuera</span><span>' + s.minutosFuera + ' min</span></p>' +
+    '<p><span class="k">Tiempo dentro</span><span>' + fmtTiempo(s.minutosDentro) + '</span></p>' +
+    '<p><span class="k">Tiempo fuera</span><span>' + fmtTiempo(s.minutosFuera) + '</span></p>' +
     '<p><span class="k">Batería mín / máx</span><span>' + (s.bateriaMin == null ? '-' : Math.round(s.bateriaMin) + '% / ' + Math.round(s.bateriaMax) + '%') + '</span></p>' +
     '<p><span class="k">Temperatura media</span><span>' + (s.temperaturaMedia ?? '-') + ' °C</span></p>' +
     '<p><span class="k">Tiempo en funcionamiento</span><span>' + fmtTiempo(s.minutosFuncionando) + '</span></p>' +
-    '<p><span class="k">Actividad</span><span style="text-align:right">' + act + '</span></p>';
+    '<p><span class="k">Actividad</span></p>' + actHtml;
+}
+
+// ----- Gráficas -----
+let chBat = null, chTemp = null, chAct = null, chDist = null, chZona = null, chBatAll = null;
+const baseOpts = {responsive: true, maintainAspectRatio: false, animation: false, plugins: {legend: {display: false}}};
+const tick10 = {ticks: {font: {size: 10}, maxTicksLimit: 6}};
+const tickSm = {ticks: {font: {size: 10}}};
+
+function initCharts() {
+  if (typeof Chart === 'undefined') return;
+  const line = (id, color, lim = {}) => new Chart($(id), {
+    type: 'line',
+    data: {labels: [], datasets: [{data: [], borderColor: color, backgroundColor: color + '33', fill: true, tension: .3, pointRadius: 0, spanGaps: false}]},
+    options: {...baseOpts, scales: {x: tick10, y: {...lim, ...tickSm}}}
+  });
+  chBat = line('cBat', '#97C459', {min: 0, max: 100});
+  chTemp = line('cTemp', '#E8B04B');
+  chAct = new Chart($('cAct'), {
+    type: 'doughnut',
+    data: {labels: [], datasets: [{data: [], backgroundColor: ['#97C459', '#E8B04B', '#85B7EB', '#AFA9EC', '#F09595']}]},
+    options: {...baseOpts, plugins: {legend: {display: true, position: 'right', labels: {boxWidth: 10, font: {size: 11}}}}}
+  });
+  chDist = new Chart($('cDist'), {
+    type: 'bar',
+    data: {labels: [], datasets: [{data: [], backgroundColor: COLOR_OK}]},
+    options: {...baseOpts, scales: {x: tickSm, y: tickSm}}
+  });
+  chZona = new Chart($('cZona'), {
+    type: 'bar',
+    data: {labels: [], datasets: [{label: 'Dentro', data: [], backgroundColor: '#3B6D11'}, {label: 'Fuera', data: [], backgroundColor: COLOR_BAD}]},
+    options: {...baseOpts, plugins: {legend: {display: true, labels: {boxWidth: 10, font: {size: 11}}}},
+      scales: {x: {stacked: true, ...tickSm}, y: {stacked: true, ...tickSm}}}
+  });
+  chBatAll = new Chart($('cBatAll'), {
+    type: 'bar',
+    data: {labels: [], datasets: [{data: [], backgroundColor: '#97C459'}]},
+    options: {...baseOpts, scales: {x: tickSm, y: {min: 0, max: 100, ...tickSm}}}
+  });
+}
+
+const avg = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null;
+const hhmm = ts => new Date(ts).toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
+
+// Agrupa las lecturas en tramos de 15 min para que la gráfica no tenga miles de puntos
+function porTramos(rows, min = 15) {
+  const size = min * 60000, grupos = new Map();
+  for (const r of rows) {
+    const k = Math.floor(r.ts / size) * size;
+    if (!grupos.has(k)) grupos.set(k, {b: [], t: []});
+    const g = grupos.get(k);
+    if (r.bateria != null) g.b.push(r.bateria);
+    if (r.temperatura != null) g.t.push(r.temperatura);
+  }
+  const keys = [...grupos.keys()].sort((a, b) => a - b);
+  return {
+    labels: keys.map(hhmm),
+    bat: keys.map(k => avg(grupos.get(k).b)),
+    temp: keys.map(k => avg(grupos.get(k).t))
+  };
+}
+
+function updateSelCharts(id, h, s) {
+  if (!chBat) return;
+  $('selTitle').textContent = 'Gráficas del bisonte ' + id + ' (24 h)';
+  const t = porTramos(h);
+  chBat.data.labels = t.labels; chBat.data.datasets[0].data = t.bat; chBat.update();
+  chTemp.data.labels = t.labels; chTemp.data.datasets[0].data = t.temp; chTemp.update();
+  const act = Object.entries(s.actividad);
+  chAct.data.labels = act.map(x => x[0]);
+  chAct.data.datasets[0].data = act.map(x => x[1]);
+  chAct.update();
+}
+
+async function loadGeneral() {
+  if (!chDist || !animales.length) return;
+  const res = await Promise.all(animales.map(a =>
+    api('/api/estadisticas?animal=' + a.animal + '&horas=24').then(s => ({id: a.animal, s})).catch(() => null)
+  ));
+  const ok = res.filter(Boolean);
+  const labels = ok.map(r => 'Bisonte ' + r.id);
+  chDist.data.labels = labels;
+  chDist.data.datasets[0].data = ok.map(r => r.s.distanciaKm);
+  chDist.update();
+  chZona.data.labels = labels;
+  chZona.data.datasets[0].data = ok.map(r => r.s.minutosDentro);
+  chZona.data.datasets[1].data = ok.map(r => r.s.minutosFuera);
+  chZona.update();
+}
+
+function updateBatAll() {
+  if (!chBatAll) return;
+  chBatAll.data.labels = animales.map(a => 'Bisonte ' + a.animal);
+  chBatAll.data.datasets[0].data = animales.map(a => Math.round(a.bateria));
+  chBatAll.update();
 }
 
 async function loadTrailAndStats(id) {
@@ -183,6 +345,7 @@ async function loadTrailAndStats(id) {
   if (trails[id]) map.removeLayer(trails[id]);
   trails[id] = L.polyline(h.map(r => [r.lat, r.lng]), {color: '#E8B04B', weight: 3, opacity: 0.85}).addTo(map);
   renderStats(s);
+  updateSelCharts(id, h, s);
 }
 
 function select(id) {
@@ -204,8 +367,11 @@ async function poll() {
     $('offline').style.display = 'none';
     animales = d.animales;
 
-    const key = JSON.stringify(d.zona);
-    if (key !== zonaKey) { zonaKey = key; zona = d.zona; drawZona(); }
+    const zk = JSON.stringify(d.zona);
+    if (zk !== zonaKey) { zonaKey = zk; zona = d.zona; drawZona(); }
+
+    const pk = JSON.stringify(d.prohibidas || []);
+    if (pk !== prohKey) { prohKey = pk; prohibidas = d.prohibidas || []; drawProhibidas(); }
 
     animales.forEach(a => {
       const prev = prevDentro[a.animal];
@@ -216,6 +382,14 @@ async function poll() {
       if (zona && prev === 0 && a.dentro === 1) addLog('Bisonte ' + a.animal + ' ha vuelto a la zona');
       prevDentro[a.animal] = a.dentro;
 
+      const pp = prevProh[a.animal];
+      if (pp === 0 && a.enProhibida) {
+        addLog('Bisonte ' + a.animal + ' ha entrado en una zona prohibida. Vibración activada');
+        banner('Bisonte ' + a.animal + ' en zona prohibida');
+      }
+      if (pp === 1 && !a.enProhibida) addLog('Bisonte ' + a.animal + ' ha salido de la zona prohibida');
+      prevProh[a.animal] = a.enProhibida ? 1 : 0;
+
       if (!markers[a.animal]) {
         markers[a.animal] = L.marker([a.lat, a.lng], {icon: pinIcon(a)}).addTo(map);
         markers[a.animal].on('click', () => select(a.animal));
@@ -225,6 +399,7 @@ async function poll() {
 
     renderList();
     renderDetail();
+    updateBatAll();
     if (selected && Date.now() - lastStats > 10000) {
       lastStats = Date.now();
       loadTrailAndStats(selected).catch(() => {});
@@ -233,44 +408,65 @@ async function poll() {
     $('offline').style.display = 'block';
   }
 }
+
+initCharts();
 setInterval(poll, 2000);
 poll();
+setTimeout(() => loadGeneral().catch(() => {}), 1500);
+setInterval(() => loadGeneral().catch(() => {}), 10000);
 
-// ----- Zona: se guarda en el servidor -----
-$('btnDraw').onclick = () => {
-  drawing = !drawing;
+// ----- Zonas: azules (permitidas) y rojas (prohibidas), guardadas en el servidor -----
+function resetDraw() {
+  drawing = null;
   drawPts = [];
   if (drawLine) { map.removeLayer(drawLine); drawLine = null; }
-  $('btnDraw').classList.toggle('on', drawing);
-  $('btnClose').disabled = !drawing;
-  $('hint').textContent = drawing
-    ? 'Marca los vértices en el mapa y pulsa "Cerrar zona" (mínimo 3).'
-    : 'Pulsa "Dibujar zona" y marca los vértices en el mapa.';
-};
+  $('btnDrawOk').classList.remove('on');
+  $('btnDrawBad').classList.remove('on');
+  $('btnClose').disabled = true;
+  $('hint').textContent = 'Elige el tipo de zona y marca los vértices en el mapa.';
+}
+
+function setDraw(mode) {
+  if (drawing === mode) { resetDraw(); return; }
+  resetDraw();
+  drawing = mode;
+  $('btnDrawOk').classList.toggle('on', mode === 'ok');
+  $('btnDrawBad').classList.toggle('on', mode === 'bad');
+  $('btnClose').disabled = false;
+  $('hint').textContent = 'Marca los vértices en el mapa y pulsa "Cerrar zona" (mínimo 3). Zona ' +
+    (mode === 'ok' ? 'permitida (azul).' : 'prohibida (roja).');
+}
+
+$('btnDrawOk').onclick = () => setDraw('ok');
+$('btnDrawBad').onclick = () => setDraw('bad');
 
 map.on('click', e => {
   if (!drawing) return;
   drawPts.push([e.latlng.lat, e.latlng.lng]);
   if (drawLine) map.removeLayer(drawLine);
-  drawLine = L.polyline(drawPts, {color: '#185FA5', dashArray: '4 4'}).addTo(map);
+  drawLine = L.polyline(drawPts, {color: drawing === 'bad' ? COLOR_BAD : COLOR_OK, dashArray: '4 4'}).addTo(map);
 });
 
 $('btnClose').onclick = async () => {
+  if (!drawing) return;
   if (drawPts.length < 3) { banner('Necesitas al menos 3 vértices'); return; }
+  const mode = drawing;
+  const url = mode === 'bad' ? '/api/prohibidas' : '/api/zona';
   try {
-    await api('/api/zona', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({puntos: drawPts})});
-    addLog('Zona guardada en el servidor');
+    await api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({puntos: drawPts})});
+    addLog(mode === 'bad' ? 'Zona prohibida guardada' : 'Zona permitida guardada');
   } catch (e) { banner('No se pudo guardar la zona'); }
-  if (drawLine) { map.removeLayer(drawLine); drawLine = null; }
-  drawing = false; drawPts = [];
-  $('btnDraw').classList.remove('on');
-  $('btnClose').disabled = true;
-  $('hint').textContent = 'Zona guardada. Pulsa "Dibujar zona" para cambiarla.';
+  resetDraw();
   poll();
 };
 
 $('btnClear').onclick = async () => {
-  try { await api('/api/zona', {method: 'DELETE'}); addLog('Zona borrada'); } catch (e) { banner('No se pudo borrar la zona'); }
+  try { await api('/api/zona', {method: 'DELETE'}); addLog('Zona permitida borrada'); } catch (e) { banner('No se pudo borrar la zona'); }
+  poll();
+};
+
+$('btnClearBad').onclick = async () => {
+  try { await api('/api/prohibidas', {method: 'DELETE'}); addLog('Zonas prohibidas borradas'); } catch (e) { banner('No se pudieron borrar las zonas rojas'); }
   poll();
 };
 
@@ -280,9 +476,6 @@ $('btnEscape').onclick = async () => {
   try { await api('/api/simular-salida/' + selected, {method: 'POST'}); }
   catch (e) { banner('Solo se pueden simular salidas de los bisontes del simulador'); }
 };
-
-// ----- Limpieza de marcadores al cambiar animal (uso futuro) -----
-function renderAllPins() { animales.forEach(a => markers[a.animal] && markers[a.animal].setIcon(pinIcon(a))); }
 </script>
 </body>
 </html>
