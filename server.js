@@ -1,4 +1,4 @@
-// Servidor de control de bisontes.
+// BISONTECH: servidor.
 // Recibe lecturas (del collar o del simulador), las guarda en SQLite y sirve la web.
 // Requiere Node.js 22.5 o superior. No necesita instalar dependencias.
 //
@@ -15,9 +15,11 @@ const PORT = process.env.PORT || 3000;
 const SIM = process.argv.includes('--sim');
 const TICK_MS = 5000;
 const CENTER = [40.752802421187845, -3.8113048447402043];
+// Si pasan más de 10 min entre dos lecturas, se considera que el collar no funcionaba
+const MAX_GAP_MS = 10 * 60e3;
 
 // ---------- Base de datos ----------
-const db = new DatabaseSync(path.join(__dirname, 'bisontes.db'));
+const db = new DatabaseSync(process.env.DB_PATH || path.join(__dirname, 'bisontes.db'));
 db.exec(`
   CREATE TABLE IF NOT EXISTS lecturas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +34,7 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_animal_ts ON lecturas(animal, ts);
   CREATE TABLE IF NOT EXISTS zona (id INTEGER PRIMARY KEY CHECK (id = 1), puntos TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS prohibidas (id INTEGER PRIMARY KEY AUTOINCREMENT, puntos TEXT NOT NULL, creada INTEGER);
 `);
 
 const insertStmt = db.prepare(
@@ -50,11 +53,24 @@ const zonaSet = db.prepare(
   'INSERT INTO zona (id, puntos) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET puntos = excluded.puntos'
 );
 const zonaDel = db.prepare('DELETE FROM zona WHERE id = 1');
+const prohGetAll = db.prepare('SELECT id, puntos FROM prohibidas ORDER BY id');
+const prohAdd = db.prepare('INSERT INTO prohibidas (puntos, creada) VALUES (?, ?)');
+const prohDelAll = db.prepare('DELETE FROM prohibidas');
+const prohDel = db.prepare('DELETE FROM prohibidas WHERE id = ?');
 
 // ---------- Geografía ----------
 function getZona() {
   const row = zonaGet.get();
   return row ? JSON.parse(row.puntos) : null;
+}
+
+function getProhibidas() {
+  return prohGetAll.all().map(r => ({ id: r.id, puntos: JSON.parse(r.puntos) }));
+}
+
+function esPoligono(p) {
+  return Array.isArray(p) && p.length >= 3 &&
+    p.every(x => Array.isArray(x) && x.length === 2 && x.every(Number.isFinite));
 }
 
 function estaDentro(lat, lng, poly) {
@@ -79,6 +95,26 @@ function distanciaM(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
+// Altura del sol sobre el horizonte en la finca (seno del ángulo). > 0 = de día.
+// Cálculo solar (NOAA simplificado) en UTC: no depende de la zona horaria del servidor.
+function sinElevacion(ts) {
+  const rad = x => x * Math.PI / 180;
+  const d = new Date(ts);
+  const dayStart = Date.UTC(d.getUTCFullYear(), 0, 0);
+  const N = (ts - dayStart) / 86400000;
+  const g = 2 * Math.PI * (N - 1) / 365;
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g)
+    - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g)
+    - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g)
+    - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const minUTC = d.getUTCHours() * 60 + d.getUTCMinutes() + d.getUTCSeconds() / 60;
+  const tst = minUTC + eqt + 4 * CENTER[1];
+  const ha = rad(tst / 4 - 180);
+  const lat = rad(CENTER[0]);
+  return Math.sin(lat) * Math.sin(decl) + Math.cos(lat) * Math.cos(decl) * Math.cos(ha);
+}
+
 // ---------- Guardar y estadísticas ----------
 function guardar(l) {
   const zona = getZona();
@@ -88,16 +124,18 @@ function guardar(l) {
 
 function estadisticas(id, horas) {
   const rows = historyStmt.all(id, Date.now() - horas * 3600e3);
-  let km = 0, minDentro = 0, minFuera = 0;
+  let km = 0, minDentro = 0, minFuera = 0, minFunc = 0;
   const actividad = {};
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    if (r.actividad) actividad[r.actividad] = (actividad[r.actividad] || 0) + 1;
-    if (i === 0) continue;
-    const p = rows[i - 1];
-    const dtMin = Math.min(r.ts - p.ts, 10 * 60e3) / 60000; // tope de 10 min entre lecturas
+  for (let i = 1; i < rows.length; i++) {
+    const p = rows[i - 1], r = rows[i];
+    const dt = r.ts - p.ts;
+    if (dt > MAX_GAP_MS) continue; // hueco sin lecturas: el collar no informaba
+    const min = dt / 60000;
+    minFunc += min;
     km += distanciaM(p, r) / 1000;
-    if (p.dentro) minDentro += dtMin; else minFuera += dtMin;
+    if (p.dentro) minDentro += min; else minFuera += min;
+    const act = p.actividad || 'Sin dato';
+    actividad[act] = (actividad[act] || 0) + min;
   }
   const bats = rows.map(r => r.bateria).filter(v => v != null);
   const temps = rows.map(r => r.temperatura).filter(v => v != null);
@@ -106,10 +144,11 @@ function estadisticas(id, horas) {
     distanciaKm: +km.toFixed(2),
     minutosDentro: Math.round(minDentro),
     minutosFuera: Math.round(minFuera),
+    minutosFuncionando: Math.round(minFunc),
     bateriaMin: bats.length ? Math.min(...bats) : null,
     bateriaMax: bats.length ? Math.max(...bats) : null,
     temperaturaMedia: temps.length ? +(temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1) : null,
-    actividad
+    actividad: Object.fromEntries(Object.entries(actividad).map(([k, v]) => [k, Math.round(v)]))
   };
 }
 
@@ -124,41 +163,27 @@ const sim = [1, 2, 3, 4, 5].map(id => ({
   escaping: false
 }));
 
-function sunFactor(h) {
-  const s = Math.sin(Math.PI * (h - 6) / 14);
-  return s > 0 ? s : 0;
-}
-
-function realHour() {
-  const d = new Date();
-  return d.getHours() + d.getMinutes() / 60;
-}
-
 function simTick() {
   const zona = getZona();
-  const sun = sunFactor(realHour());
+  const sun = sinElevacion(Date.now());
   const target = zona ? centroide(zona) : null;
 
   for (const b of sim) {
-    b.bat = Math.min(100, Math.max(0, b.bat + (sun > 0.05 ? sun * 0.005 : -0.00075)));
+    b.bat = Math.min(100, Math.max(0, b.bat + (sun > 0 ? sun * 0.005 : -0.00075)));
     b.temp = Math.min(39.5, Math.max(37.5, b.temp + (Math.random() - 0.5) * 0.04));
     if (Math.random() < 0.02) b.act = ['Pastando', 'Caminando', 'Descansando'][Math.floor(Math.random() * 3)];
 
     if (!zona) {
-      // Sin zona: deambulan despacio alrededor de su pasto
       b.lat += (Math.random() - 0.5) * 0.00005 + (CENTER[0] - b.lat) * 0.01;
       b.lng += (Math.random() - 0.5) * 0.00006 + (CENTER[1] - b.lng) * 0.01;
     } else if (b.escaping) {
-      // Salida lenta hacia el este hasta cruzar el borde
       b.lng += 0.00003;
       if (!estaDentro(b.lat, b.lng, zona)) b.escaping = false;
     } else if (estaDentro(b.lat, b.lng, zona)) {
-      // Paseo lento, solo se acepta el paso si sigue dentro
       const nla = b.lat + (Math.random() - 0.5) * 0.00005;
       const nln = b.lng + (Math.random() - 0.5) * 0.00006;
       if (estaDentro(nla, nln, zona)) { b.lat = nla; b.lng = nln; }
     } else {
-      // Fuera: vuelve despacio hacia el centro de la zona
       const dla = target[0] - b.lat, dln = target[1] - b.lng;
       const d = Math.hypot(dla, dln) || 1;
       const step = 0.00004;
@@ -184,7 +209,18 @@ function leerBody(req) {
   });
 }
 
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css' };
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript',
+  '.css': 'text/css',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon'
+};
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -218,7 +254,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/estado' && req.method === 'GET') {
-      return json(res, 200, { animales: latestStmt.all(), zona: getZona() });
+      const zona = getZona();
+      const prohs = getProhibidas();
+      const animales = latestStmt.all().map(a => ({
+        ...a,
+        dentro: zona ? (estaDentro(a.lat, a.lng, zona) ? 1 : 0) : 1,
+        enProhibida: prohs.some(z => estaDentro(a.lat, a.lng, z.puntos))
+      }));
+      return json(res, 200, { animales, zona, prohibidas: prohs });
     }
 
     if (p === '/api/historial' && req.method === 'GET') {
@@ -237,13 +280,34 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/zona' && req.method === 'POST') {
       const b = await leerBody(req);
-      if (!Array.isArray(b.puntos) || b.puntos.length < 3) return json(res, 400, { error: 'Hacen falta al menos 3 puntos' });
+      if (!esPoligono(b.puntos)) return json(res, 400, { error: 'Hacen falta al menos 3 puntos válidos' });
       zonaSet.run(JSON.stringify(b.puntos));
       return json(res, 200, { ok: true });
     }
 
     if (p === '/api/zona' && req.method === 'DELETE') {
       zonaDel.run();
+      return json(res, 200, { ok: true });
+    }
+
+    // Zonas prohibidas (rojas): se pueden añadir varias
+    if (p === '/api/prohibidas' && req.method === 'GET') return json(res, 200, { zonas: getProhibidas() });
+
+    if (p === '/api/prohibidas' && req.method === 'POST') {
+      const b = await leerBody(req);
+      if (!esPoligono(b.puntos)) return json(res, 400, { error: 'Hacen falta al menos 3 puntos válidos' });
+      prohAdd.run(JSON.stringify(b.puntos), Date.now());
+      return json(res, 201, { ok: true });
+    }
+
+    if (p === '/api/prohibidas' && req.method === 'DELETE') {
+      prohDelAll.run();
+      return json(res, 200, { ok: true });
+    }
+
+    const mProh = p.match(/^\/api\/prohibidas\/(\d+)$/);
+    if (mProh && req.method === 'DELETE') {
+      prohDel.run(Number(mProh[1]));
       return json(res, 200, { ok: true });
     }
 
@@ -254,14 +318,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
-    // Web estática
+    // Web estática (index.html, logo, etc.)
     const rel = p === '/' ? 'index.html' : p.slice(1);
     const base = path.join(__dirname, 'public');
     const full = path.join(base, path.normalize(rel));
     if (!full.startsWith(base)) return json(res, 403, { error: 'Prohibido' });
     fs.readFile(full, (err, data) => {
       if (err) return json(res, 404, { error: 'No encontrado' });
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(full)] || 'application/octet-stream' });
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(full).toLowerCase()] || 'application/octet-stream' });
       res.end(data);
     });
   } catch (e) {
@@ -270,7 +334,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Servidor en http://localhost:${PORT}` + (SIM ? ' (simulador activo)' : ''));
+  console.log(`BISONTECH en http://localhost:${PORT}` + (SIM ? ' (simulador activo)' : ''));
 });
 
 if (SIM) {
