@@ -165,31 +165,44 @@ const sim = [1, 2, 3, 4, 5].map(id => ({
 
 function simTick() {
   const zona = getZona();
+  const prohs = getProhibidas().map(z => z.puntos);
+  const enRoja = (lat, lng) => prohs.some(z => estaDentro(lat, lng, z));
   const sun = sinElevacion(Date.now());
-  const target = zona ? centroide(zona) : null;
+  const target = zona ? centroide(zona) : CENTER;
+  const step = 0.00004;
+  const N = 24;
+  const OFFS = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10, 11, -11, 12];
 
   for (const b of sim) {
     b.bat = Math.min(100, Math.max(0, b.bat + (sun > 0 ? sun * 0.005 : -0.00075)));
     b.temp = Math.min(39.5, Math.max(37.5, b.temp + (Math.random() - 0.5) * 0.04));
     if (Math.random() < 0.02) b.act = ['Pastando', 'Caminando', 'Descansando'][Math.floor(Math.random() * 3)];
 
+    let goal = null;
+    let mustStayInside = false;
     if (!zona) {
-      b.lat += (Math.random() - 0.5) * 0.00005 + (CENTER[0] - b.lat) * 0.01;
-      b.lng += (Math.random() - 0.5) * 0.00006 + (CENTER[1] - b.lng) * 0.01;
+      goal = Math.atan2(CENTER[0] - b.lat, CENTER[1] - b.lng);
     } else if (b.escaping) {
-      b.lng += 0.00003;
-      if (!estaDentro(b.lat, b.lng, zona)) b.escaping = false;
-    } else if (estaDentro(b.lat, b.lng, zona)) {
-      const nla = b.lat + (Math.random() - 0.5) * 0.00005;
-      const nln = b.lng + (Math.random() - 0.5) * 0.00006;
-      if (estaDentro(nla, nln, zona)) { b.lat = nla; b.lng = nln; }
+      goal = 0;
+    } else if (!estaDentro(b.lat, b.lng, zona)) {
+      goal = Math.atan2(target[0] - b.lat, target[1] - b.lng);
     } else {
-      const dla = target[0] - b.lat, dln = target[1] - b.lng;
-      const d = Math.hypot(dla, dln) || 1;
-      const step = 0.00004;
-      b.lat += dla / d * Math.min(step, d);
-      b.lng += dln / d * Math.min(step, d);
+      mustStayInside = true;
     }
+
+    const base = goal ?? Math.random() * 2 * Math.PI;
+    for (const o of OFFS) {
+      const a = base + o * (2 * Math.PI / N);
+      const nla = b.lat + Math.sin(a) * step;
+      const nln = b.lng + Math.cos(a) * step;
+      if (enRoja(nla, nln)) continue;
+      if (mustStayInside && zona && !estaDentro(nla, nln, zona)) continue;
+      b.lat = nla;
+      b.lng = nln;
+      break;
+    }
+
+    if (b.escaping && zona && !estaDentro(b.lat, b.lng, zona)) b.escaping = false;
 
     guardar({ animal: b.id, ts: Date.now(), lat: b.lat, lng: b.lng, bateria: b.bat, temperatura: b.temp, actividad: b.act });
   }
