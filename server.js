@@ -57,6 +57,7 @@ const prohGetAll = db.prepare('SELECT id, puntos FROM prohibidas ORDER BY id');
 const prohAdd = db.prepare('INSERT INTO prohibidas (puntos, creada) VALUES (?, ?)');
 const prohDelAll = db.prepare('DELETE FROM prohibidas');
 const prohDel = db.prepare('DELETE FROM prohibidas WHERE id = ?');
+const allStmt = db.prepare('SELECT animal, ts, lat, lng FROM lecturas WHERE ts >= ? ORDER BY ts');
 
 // ---------- Geografía ----------
 function getZona() {
@@ -153,6 +154,13 @@ function estadisticas(id, horas) {
 }
 
 // ---------- Simulador ----------
+const K = Math.cos(CENTER[0] * Math.PI / 180);
+const CELL_LAT = 0.000045;        // celdas de unos 5 m
+const CELL_LNG = 0.000045 / K;
+const CELDA_M2 = 25;
+const WALK = 0.00005;             // paso al caminar (~5 m cada 5 s)
+const GRAZE = 0.00001;            // paso al pastar (~1 m cada 5 s)
+
 const sim = [1, 2, 3, 4, 5].map(id => ({
   id,
   lat: CENTER[0] + (Math.random() - 0.5) * 0.002,
@@ -160,52 +168,133 @@ const sim = [1, 2, 3, 4, 5].map(id => ({
   bat: 40 + Math.random() * 50,
   temp: 38.5,
   act: 'Pastando',
+  h: Math.random() * 2 * Math.PI,
+  pasto: null,
+  hastaCambio: 0,
   escaping: false
 }));
+
+const angulo = (dLat, dLng) => Math.atan2(dLat, dLng * K);
+const normal = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+function puntoAleatorio(zona, enRoja) {
+  const la0 = Math.min(...zona.map(p => p[0])), la1 = Math.max(...zona.map(p => p[0]));
+  const lo0 = Math.min(...zona.map(p => p[1])), lo1 = Math.max(...zona.map(p => p[1]));
+  for (let i = 0; i < 200; i++) {
+    const la = la0 + Math.random() * (la1 - la0);
+    const lo = lo0 + Math.random() * (lo1 - lo0);
+    if (estaDentro(la, lo, zona) && !enRoja(la, lo)) return [la, lo];
+  }
+  return null;
+}
+
+// Avanza un paso probando el rumbo previsto y, si no vale, rumbos cercanos.
+// Nunca entra en una zona roja. Dentro de la azul, no sale salvo que se le permita.
+function paso(b, velocidad, zona, enRoja, puedeSalir, huir) {
+  const dist = (la, lo) => Math.hypot(la - huir[0], (lo - huir[1]) * K);
+  for (let k = 0; k <= 8; k++) {
+    for (const s of k === 0 ? [0] : [1, -1]) {
+      const a = b.h + s * k * 0.35;
+      const la = b.lat + Math.sin(a) * velocidad;
+      const lo = b.lng + Math.cos(a) * velocidad / K;
+      if (enRoja(la, lo)) {
+        // Si ya está dentro de una roja, solo vale un paso que se aleje del centro de esa zona
+        if (!huir || dist(la, lo) <= dist(b.lat, b.lng)) continue;
+      }
+      if (zona && !puedeSalir && estaDentro(b.lat, b.lng, zona) && !estaDentro(la, lo, zona)) continue;
+      b.lat = la; b.lng = lo; b.h = a;
+      return;
+    }
+  }
+}
 
 function simTick() {
   const zona = getZona();
   const prohs = getProhibidas().map(z => z.puntos);
-  const enRoja = (lat, lng) => prohs.some(z => estaDentro(lat, lng, z));
+  const enRoja = (la, lo) => prohs.some(z => estaDentro(la, lo, z));
   const sun = sinElevacion(Date.now());
-  const target = zona ? centroide(zona) : CENTER;
-  const step = 0.00004;
-  const N = 24;
-  const OFFS = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8, 9, -9, 10, -10, 11, -11, 12];
+  const centro = zona ? centroide(zona) : CENTER;
+  const ahora = Date.now();
 
   for (const b of sim) {
     b.bat = Math.min(100, Math.max(0, b.bat + (sun > 0 ? sun * 0.005 : -0.00075)));
     b.temp = Math.min(39.5, Math.max(37.5, b.temp + (Math.random() - 0.5) * 0.04));
-    if (Math.random() < 0.02) b.act = ['Pastando', 'Caminando', 'Descansando'][Math.floor(Math.random() * 3)];
 
-    let goal = null;
-    let mustStayInside = false;
-    if (!zona) {
-      goal = Math.atan2(CENTER[0] - b.lat, CENTER[1] - b.lng);
-    } else if (b.escaping) {
-      goal = 0;
-    } else if (!estaDentro(b.lat, b.lng, zona)) {
-      goal = Math.atan2(target[0] - b.lat, target[1] - b.lng);
+    // Cada 3-15 min cambia de actividad y de punto de pasto
+    if (ahora > b.hastaCambio) {
+      b.act = ['Pastando', 'Pastando', 'Pastando', 'Caminando', 'Descansando'][Math.floor(Math.random() * 5)];
+      b.hastaCambio = ahora + (3 + Math.random() * 12) * 60e3;
+      b.pasto = zona ? puntoAleatorio(zona, enRoja) : null;
+    }
+
+    let velocidad = b.act === 'Caminando' ? WALK : b.act === 'Pastando' ? GRAZE : 0;
+    let quiere;
+    let puedeSalir = false;
+    let huir = null;
+
+    if (b.escaping) {
+      quiere = 0; velocidad = WALK; puedeSalir = true; b.act = 'Caminando';
+    } else if (enRoja(b.lat, b.lng)) {
+      // Dentro de una zona roja: sale hacia fuera de ella
+      const z = prohs.find(z => estaDentro(b.lat, b.lng, z));
+      const c = centroide(z);
+      quiere = angulo(b.lat - c[0], b.lng - c[1]);
+      velocidad = WALK; puedeSalir = true; huir = c;
+    } else if (zona && !estaDentro(b.lat, b.lng, zona)) {
+      // Fuera de la zona azul: vuelve
+      quiere = angulo(centro[0] - b.lat, centro[1] - b.lng);
+      velocidad = WALK;
+    } else if (b.pasto) {
+      quiere = angulo(b.pasto[0] - b.lat, b.pasto[1] - b.lng);
+      if (Math.hypot(b.pasto[0] - b.lat, b.pasto[1] - b.lng) < 0.00005) b.pasto = puntoAleatorio(zona, enRoja);
     } else {
-      mustStayInside = true;
+      quiere = b.h;
     }
 
-    const base = goal ?? Math.random() * 2 * Math.PI;
-    for (const o of OFFS) {
-      const a = base + o * (2 * Math.PI / N);
-      const nla = b.lat + Math.sin(a) * step;
-      const nln = b.lng + Math.cos(a) * step;
-      if (enRoja(nla, nln)) continue;
-      if (mustStayInside && zona && !estaDentro(nla, nln, zona)) continue;
-      b.lat = nla;
-      b.lng = nln;
-      break;
-    }
+    // Gira poco a poco hacia el rumbo deseado, con algo de azar
+    const giro = normal(quiere - b.h);
+    b.h = normal(b.h + Math.max(-0.2, Math.min(0.2, giro)) + (Math.random() - 0.5) * 0.3);
 
+    if (velocidad > 0) paso(b, velocidad, zona, enRoja, puedeSalir, huir);
     if (b.escaping && zona && !estaDentro(b.lat, b.lng, zona)) b.escaping = false;
 
     guardar({ animal: b.id, ts: Date.now(), lat: b.lat, lng: b.lng, bateria: b.bat, temperatura: b.temp, actividad: b.act });
   }
+}
+
+// ---------- Series de 24 h (una barra por hora) ----------
+// prohibidaMin: minutos dentro de zona roja en esa hora
+// m2: m² acumulados que se han pisado desde el inicio de la ventana (celdas de 5 m)
+function celda(lat, lng) {
+  return Math.floor(lat / CELL_LAT) + ':' + Math.floor(lng / CELL_LNG);
+}
+
+function serie(animal) {
+  const H = 24;
+  const zonas = getProhibidas().map(z => z.puntos);
+  const start = Date.now() - H * 3600e3;
+  const rows = animal ? historyStmt.all(animal, start) : allStmt.all(start);
+  const prohMin = new Array(H).fill(0);
+  const celdasHora = Array.from({ length: H }, () => new Set());
+  const previo = new Map();
+
+  for (const r of rows) {
+    const key = animal ?? r.animal;
+    const hi = Math.min(H - 1, Math.floor((r.ts - start) / 3600e3));
+    celdasHora[hi].add(celda(r.lat, r.lng));
+    const p = previo.get(key);
+    if (p && p.enRoja && r.ts - p.ts <= MAX_GAP_MS) {
+      const pi = Math.min(H - 1, Math.floor((p.ts - start) / 3600e3));
+      prohMin[pi] += (r.ts - p.ts) / 60000;
+    }
+    previo.set(key, { ts: r.ts, enRoja: zonas.some(z => estaDentro(r.lat, r.lng, z)) });
+  }
+
+  const union = new Set();
+  return Array.from({ length: H }, (_, h) => {
+    celdasHora[h].forEach(c => union.add(c));
+    return { ts: start + h * 3600e3, prohibidaMin: Math.round(prohMin[h]), m2: union.size * CELDA_M2 };
+  });
 }
 
 // ---------- HTTP ----------
@@ -287,6 +376,11 @@ const server = http.createServer(async (req, res) => {
       const id = Number(url.searchParams.get('animal'));
       const horas = Number(url.searchParams.get('horas') || 24);
       return json(res, 200, estadisticas(id, horas));
+    }
+
+    if (p === '/api/serie' && req.method === 'GET') {
+      const a = url.searchParams.get('animal');
+      return json(res, 200, serie(a ? Number(a) : null));
     }
 
     if (p === '/api/zona' && req.method === 'GET') return json(res, 200, { zona: getZona() });
