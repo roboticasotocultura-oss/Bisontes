@@ -75,21 +75,29 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
     <h2>Últimas 24 h</h2>
     <div id="stats" class="card"><span class="k">Selecciona un bisonte.</span></div>
 
-    <h2 id="selTitle">Gráficas del bisonte</h2>
+    <h2 id="selTitle">Gráficas del bisonte (24 h)</h2>
     <p class="cap">Batería (%)</p>
     <div class="chart-box"><canvas id="cBat"></canvas></div>
     <p class="cap">Temperatura (°C)</p>
     <div class="chart-box"><canvas id="cTemp"></canvas></div>
     <p class="cap">Actividad (minutos)</p>
     <div class="chart-box"><canvas id="cAct"></canvas></div>
+    <p class="cap">Minutos en zona prohibida, por hora</p>
+    <div class="chart-box"><canvas id="cRoja"></canvas></div>
+    <p class="cap">m² pisados acumulados</p>
+    <div class="chart-box"><canvas id="cM2"></canvas></div>
 
-    <h2>Gráficas generales</h2>
-    <p class="cap">Distancia recorrida (km, 24 h)</p>
+    <h2>Gráficas generales (24 h)</h2>
+    <p class="cap">Distancia recorrida (km)</p>
     <div class="chart-box"><canvas id="cDist"></canvas></div>
-    <p class="cap">Dentro / fuera de la zona (min, 24 h)</p>
+    <p class="cap">Dentro / fuera de la zona (min)</p>
     <div class="chart-box"><canvas id="cZona"></canvas></div>
     <p class="cap">Batería actual por bisonte (%)</p>
     <div class="chart-box"><canvas id="cBatAll"></canvas></div>
+    <p class="cap">Minutos en zona prohibida, por hora (todos)</p>
+    <div class="chart-box"><canvas id="cRojaGen"></canvas></div>
+    <p class="cap">m² pisados acumulados (todos)</p>
+    <div class="chart-box"><canvas id="cM2Gen"></canvas></div>
 
     <h2>Bisontes</h2>
     <div id="list"></div>
@@ -105,8 +113,10 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 <script>
 const CENTER = [40.752802421187845, -3.8113048447402043];
 const COLOR_OK = '#185FA5', COLOR_BAD = '#A32D2D';
+const SLOT = 15 * 60e3;
 
-const map = L.map('map').setView(CENTER, 16);
+// preferCanvas: las zonas y recorridos se dibujan en canvas, así no se deforman al hacer zoom
+const map = L.map('map', {preferCanvas: true}).setView(CENTER, 16);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom: 19, attribution: 'Imágenes © Esri'}).addTo(map);
 setTimeout(() => map.invalidateSize(), 100);
 window.addEventListener('resize', () => map.invalidateSize());
@@ -121,8 +131,8 @@ const api = async (url, opt) => {
 let animales = [], zona = null, zonaLayer = null, zonaKey = '';
 let prohibidas = [], prohLayers = [], prohKey = '';
 let selected = null, lastStats = 0;
-let drawing = null, drawPts = [], drawLine = null;   // drawing: 'ok' | 'bad' | null
-const markers = {}, trails = {}, prevDentro = {}, prevProh = {};
+let drawing = null, drawPts = [], drawLine = null;
+const markers = {}, trail = {line: null, id: null}, prevDentro = {}, prevProh = {};
 const logs = [];
 
 function estaDentro(lat, lng, poly) {
@@ -134,7 +144,7 @@ function estaDentro(lat, lng, poly) {
   return inside;
 }
 
-// Altura del sol en la finca (seno del ángulo). > 0 = de día. Misma fórmula que el servidor.
+// Altura del sol en la finca (> 0 = de día). Misma fórmula que el servidor.
 function sinElevacion(ts) {
   const rad = x => x * Math.PI / 180;
   const d = new Date(ts);
@@ -244,9 +254,10 @@ function renderStats(s) {
 }
 
 // ----- Gráficas -----
-let chBat = null, chTemp = null, chAct = null, chDist = null, chZona = null, chBatAll = null;
+let chBat = null, chTemp = null, chAct = null, chRoja = null, chM2 = null;
+let chDist = null, chZona = null, chBatAll = null, chRojaGen = null, chM2Gen = null;
 const baseOpts = {responsive: true, maintainAspectRatio: false, animation: false, plugins: {legend: {display: false}}};
-const tick10 = {ticks: {font: {size: 10}, maxTicksLimit: 6}};
+const tick = {ticks: {font: {size: 10}, maxTicksLimit: 6}};
 const tickSm = {ticks: {font: {size: 10}}};
 
 function initCharts() {
@@ -254,71 +265,86 @@ function initCharts() {
   const line = (id, color, lim = {}) => new Chart($(id), {
     type: 'line',
     data: {labels: [], datasets: [{data: [], borderColor: color, backgroundColor: color + '33', fill: true, tension: .3, pointRadius: 0, spanGaps: false}]},
-    options: {...baseOpts, scales: {x: tick10, y: {...lim, ...tickSm}}}
+    options: {...baseOpts, scales: {x: tick, y: {...lim, ...tickSm}}}
+  });
+  const bars = (id, datasets, extra = {}) => new Chart($(id), {
+    type: 'bar',
+    data: {labels: [], datasets},
+    options: {...baseOpts, ...extra, scales: {x: {stacked: !!extra.stacked, ...tick}, y: {stacked: !!extra.stacked, ...tickSm}}}
   });
   chBat = line('cBat', '#97C459', {min: 0, max: 100});
   chTemp = line('cTemp', '#E8B04B');
+  chM2 = line('cM2', '#185FA5');
+  chM2Gen = line('cM2Gen', '#185FA5');
   chAct = new Chart($('cAct'), {
     type: 'doughnut',
     data: {labels: [], datasets: [{data: [], backgroundColor: ['#97C459', '#E8B04B', '#85B7EB', '#AFA9EC', '#F09595']}]},
     options: {...baseOpts, plugins: {legend: {display: true, position: 'right', labels: {boxWidth: 10, font: {size: 11}}}}}
   });
-  chDist = new Chart($('cDist'), {
-    type: 'bar',
-    data: {labels: [], datasets: [{data: [], backgroundColor: COLOR_OK}]},
-    options: {...baseOpts, scales: {x: tickSm, y: tickSm}}
-  });
-  chZona = new Chart($('cZona'), {
-    type: 'bar',
-    data: {labels: [], datasets: [{label: 'Dentro', data: [], backgroundColor: '#3B6D11'}, {label: 'Fuera', data: [], backgroundColor: COLOR_BAD}]},
-    options: {...baseOpts, plugins: {legend: {display: true, labels: {boxWidth: 10, font: {size: 11}}}},
-      scales: {x: {stacked: true, ...tickSm}, y: {stacked: true, ...tickSm}}}
-  });
-  chBatAll = new Chart($('cBatAll'), {
-    type: 'bar',
-    data: {labels: [], datasets: [{data: [], backgroundColor: '#97C459'}]},
-    options: {...baseOpts, scales: {x: tickSm, y: {min: 0, max: 100, ...tickSm}}}
-  });
+  chRoja = bars('cRoja', [{data: [], backgroundColor: COLOR_BAD}]);
+  chRojaGen = bars('cRojaGen', [{data: [], backgroundColor: COLOR_BAD}]);
+  chDist = bars('cDist', [{data: [], backgroundColor: COLOR_OK}]);
+  chBatAll = bars('cBatAll', [{data: [], backgroundColor: '#97C459'}]);
+  chZona = bars('cZona', [
+    {label: 'Dentro', data: [], backgroundColor: '#3B6D11'},
+    {label: 'Fuera', data: [], backgroundColor: COLOR_BAD}
+  ], {stacked: true, plugins: {legend: {display: true, labels: {boxWidth: 10, font: {size: 11}}}}});
 }
 
 const avg = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null;
 const hhmm = ts => new Date(ts).toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
 
-// Agrupa las lecturas en tramos de 15 min para que la gráfica no tenga miles de puntos
-function porTramos(rows, min = 15) {
-  const size = min * 60000, grupos = new Map();
-  for (const r of rows) {
-    const k = Math.floor(r.ts / size) * size;
-    if (!grupos.has(k)) grupos.set(k, {b: [], t: []});
-    const g = grupos.get(k);
-    if (r.bateria != null) g.b.push(r.bateria);
-    if (r.temperatura != null) g.t.push(r.temperatura);
-  }
-  const keys = [...grupos.keys()].sort((a, b) => a - b);
-  return {
-    labels: keys.map(hhmm),
-    bat: keys.map(k => avg(grupos.get(k).b)),
-    temp: keys.map(k => avg(grupos.get(k).t))
-  };
+// Ventana fija de 24 h en tramos de 15 min: las gráficas siempre muestran el día completo
+function ventana() {
+  const s0 = Math.floor((Date.now() - 24 * 3600e3) / SLOT) * SLOT;
+  return {s0, labels: Array.from({length: 96}, (_, i) => hhmm(s0 + i * SLOT))};
 }
 
-function updateSelCharts(id, h, s) {
+function porTramos(rows) {
+  const {s0} = ventana();
+  const b = Array.from({length: 96}, () => ({b: [], t: []}));
+  for (const r of rows) {
+    const i = Math.floor((r.ts - s0) / SLOT);
+    if (i < 0 || i >= 96) continue;
+    if (r.bateria != null) b[i].b.push(r.bateria);
+    if (r.temperatura != null) b[i].t.push(r.temperatura);
+  }
+  return {bat: b.map(x => avg(x.b)), temp: b.map(x => avg(x.t))};
+}
+
+// Serie de 24 barras (una por hora) a partir del servidor
+function setSerie(chRojaC, chM2C, s) {
+  const labels = s.map(x => hhmm(x.ts));
+  chRojaC.data.labels = labels;
+  chRojaC.data.datasets[0].data = s.map(x => x.prohibidaMin);
+  chRojaC.update();
+  chM2C.data.labels = labels;
+  chM2C.data.datasets[0].data = s.map(x => x.m2);
+  chM2C.update();
+}
+
+function updateSelCharts(id, h, s, se) {
   if (!chBat) return;
   $('selTitle').textContent = 'Gráficas del bisonte ' + id + ' (24 h)';
+  const {labels} = ventana();
   const t = porTramos(h);
-  chBat.data.labels = t.labels; chBat.data.datasets[0].data = t.bat; chBat.update();
-  chTemp.data.labels = t.labels; chTemp.data.datasets[0].data = t.temp; chTemp.update();
+  chBat.data.labels = labels; chBat.data.datasets[0].data = t.bat; chBat.update();
+  chTemp.data.labels = labels; chTemp.data.datasets[0].data = t.temp; chTemp.update();
   const act = Object.entries(s.actividad);
   chAct.data.labels = act.map(x => x[0]);
   chAct.data.datasets[0].data = act.map(x => x[1]);
   chAct.update();
+  setSerie(chRoja, chM2, se);
 }
 
 async function loadGeneral() {
   if (!chDist || !animales.length) return;
-  const res = await Promise.all(animales.map(a =>
-    api('/api/estadisticas?animal=' + a.animal + '&horas=24').then(s => ({id: a.animal, s})).catch(() => null)
-  ));
+  const [res, se] = await Promise.all([
+    Promise.all(animales.map(a =>
+      api('/api/estadisticas?animal=' + a.animal + '&horas=24').then(s => ({id: a.animal, s})).catch(() => null)
+    )),
+    api('/api/serie')
+  ]);
   const ok = res.filter(Boolean);
   const labels = ok.map(r => 'Bisonte ' + r.id);
   chDist.data.labels = labels;
@@ -328,6 +354,7 @@ async function loadGeneral() {
   chZona.data.datasets[0].data = ok.map(r => r.s.minutosDentro);
   chZona.data.datasets[1].data = ok.map(r => r.s.minutosFuera);
   chZona.update();
+  setSerie(chRojaGen, chM2Gen, se);
 }
 
 function updateBatAll() {
@@ -337,22 +364,31 @@ function updateBatAll() {
   chBatAll.update();
 }
 
+// Recorrido: un punto por minuto para que el mapa vaya fluido
+function dibujaRecorrido(id, h) {
+  if (trail.line) { map.removeLayer(trail.line); trail.line = null; }
+  const pts = [];
+  let last = -Infinity;
+  for (const r of h) {
+    if (r.ts - last >= 60e3) { pts.push([r.lat, r.lng]); last = r.ts; }
+  }
+  trail.id = id;
+  trail.line = L.polyline(pts, {color: '#E8B04B', weight: 3, opacity: 0.85}).addTo(map);
+}
+
 async function loadTrailAndStats(id) {
-  const [h, s] = await Promise.all([
+  const [h, s, se] = await Promise.all([
     api('/api/historial?animal=' + id + '&horas=24'),
-    api('/api/estadisticas?animal=' + id + '&horas=24')
+    api('/api/estadisticas?animal=' + id + '&horas=24'),
+    api('/api/serie?animal=' + id)
   ]);
-  if (trails[id]) map.removeLayer(trails[id]);
-  trails[id] = L.polyline(h.map(r => [r.lat, r.lng]), {color: '#E8B04B', weight: 3, opacity: 0.85}).addTo(map);
+  dibujaRecorrido(id, h);
   renderStats(s);
-  updateSelCharts(id, h, s);
+  updateSelCharts(id, h, s, se);
 }
 
 function select(id) {
   selected = id;
-  Object.keys(trails).forEach(k => {
-    if (Number(k) !== id) { map.removeLayer(trails[k]); delete trails[k]; }
-  });
   lastStats = Date.now();
   loadTrailAndStats(id).catch(() => {});
   const a = animales.find(x => x.animal === id);
