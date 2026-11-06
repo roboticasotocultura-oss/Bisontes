@@ -41,9 +41,11 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
 .hint{font-size:12px;color:var(--muted);margin:4px 0 0}
 .chart-box{position:relative;height:150px;margin-bottom:6px}
 .cap{font-size:12px;color:var(--muted);margin:10px 0 2px}
-.pin{width:32px;height:32px;border-radius:50%;background:var(--ok);color:#fff;font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
-.pin.alert{background:var(--bad)}
-.pin.sel{outline:3px solid var(--accent)}
+.pin{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pin img{width:48px;height:48px;object-fit:contain;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
+.pin span{background:var(--ok);color:#fff;font-size:12px;font-weight:600;padding:1px 7px;border-radius:10px;border:2px solid #fff}
+.pin.alert span{background:var(--bad)}
+.pin.sel img{filter:drop-shadow(0 0 4px var(--accent))}
 .banner{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--bad);color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;display:none;z-index:999}
 .offline{position:fixed;top:10px;right:10px;background:var(--bad);color:#fff;padding:6px 10px;border-radius:8px;font-size:12px;display:none;z-index:999}
 </style>
@@ -186,7 +188,11 @@ const enAlerta = a => fueraDeZona(a) || !!a.enProhibida;
 
 function pinIcon(a) {
   const cls = ['pin', enAlerta(a) ? 'alert' : '', selected === a.animal ? 'sel' : ''].join(' ');
-  return L.divIcon({className: '', html: '<div class="' + cls + '">' + a.animal + '</div>', iconSize: [32, 32], iconAnchor: [16, 16]});
+  return L.divIcon({
+    className: '',
+    html: '<div class="' + cls + '"><img src="/bisonte.png" alt="" onerror="this.remove()"><span>' + a.animal + '</span></div>',
+    iconSize: [56, 70], iconAnchor: [28, 44]
+  });
 }
 
 function drawZona() {
@@ -257,6 +263,14 @@ const baseOpts = {responsive: true, maintainAspectRatio: false, animation: false
 const tick = {ticks: {font: {size: 10}, maxTicksLimit: 6}};
 const tickSm = {ticks: {font: {size: 10}}};
 
+function m2Line(id) {
+  return new Chart($(id), {
+    type: 'line',
+    data: {labels: [], datasets: [{data: [], borderColor: '#185FA5', backgroundColor: '#185FA533', fill: true, tension: .3, pointRadius: 3, pointBackgroundColor: '#185FA5', spanGaps: false}]},
+    options: {...baseOpts, scales: {x: tick, y: {beginAtZero: true, ...tickSm}}}
+  });
+}
+
 function initCharts() {
   if (typeof Chart === 'undefined') return;
   const line = (id, color, lim = {}) => new Chart($(id), {
@@ -271,8 +285,8 @@ function initCharts() {
   });
   chBat = line('cBat', '#97C459', {min: 0, max: 100});
   chTemp = line('cTemp', '#E8B04B');
-  chM2 = line('cM2', '#185FA5');
-  chM2Gen = line('cM2Gen', '#185FA5');
+  chM2 = m2Line('cM2');
+  chM2Gen = m2Line('cM2Gen');
   chAct = new Chart($('cAct'), {
     type: 'doughnut',
     data: {labels: [], datasets: [{data: [], backgroundColor: ['#97C459', '#E8B04B', '#85B7EB', '#AFA9EC', '#F09595']}]},
@@ -351,7 +365,7 @@ async function loadGeneral() {
     Promise.all(animales.map(a =>
       api('/api/estadisticas?animal=' + a.animal + '&horas=24').then(s => ({id: a.animal, s})).catch(() => null)
     )),
-    api('/api/serie')
+    Promise.all(animales.map(a => api('/api/serie?animal=' + a.animal).catch(() => [])))
   ]);
   const ok = res.filter(Boolean);
   const labels = ok.map(r => 'Bisonte ' + r.id);
@@ -362,7 +376,13 @@ async function loadGeneral() {
   chZona.data.datasets[0].data = ok.map(r => r.s.minutosDentro);
   chZona.data.datasets[1].data = ok.map(r => r.s.minutosFuera);
   chZona.update();
-  setM2(chM2Gen, se);
+  // Suma, hora a hora, de los m² de todos los bisontes
+  const largo = Math.max(0, ...se.map(x => x.length));
+  const suma = Array.from({length: largo}, (_, i) => {
+    const ts = (se.find(x => x[i]) || [])[i]?.ts || 0;
+    return {ts, m2: se.reduce((acc, x) => acc + (x[i]?.m2 || 0), 0)};
+  });
+  setM2(chM2Gen, suma);
 }
 
 function updateBatAll() {
