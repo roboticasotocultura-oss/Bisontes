@@ -177,6 +177,18 @@ const sim = [1, 2, 3, 4, 5].map(id => ({
 const angulo = (dLat, dLng) => Math.atan2(dLat, dLng * K);
 const normal = a => Math.atan2(Math.sin(a), Math.cos(a));
 
+// Un punto de pasto cerca de donde está (10-35 m), dentro de la zona azul y fuera de las rojas
+function puntoCerca(b, zona, enRoja) {
+  for (let i = 0; i < 30; i++) {
+    const r = (10 + Math.random() * 25) / 111000;
+    const a = Math.random() * 2 * Math.PI;
+    const la = b.lat + Math.sin(a) * r;
+    const lo = b.lng + Math.cos(a) * r / K;
+    if (estaDentro(la, lo, zona) && !enRoja(la, lo)) return [la, lo];
+  }
+  return null;
+}
+
 function puntoAleatorio(zona, enRoja) {
   const la0 = Math.min(...zona.map(p => p[0])), la1 = Math.max(...zona.map(p => p[0]));
   const lo0 = Math.min(...zona.map(p => p[1])), lo1 = Math.max(...zona.map(p => p[1]));
@@ -220,14 +232,18 @@ function simTick() {
     b.bat = Math.min(100, Math.max(0, b.bat + (sun > 0 ? sun * 0.005 : -0.00075)));
     b.temp = Math.min(39.5, Math.max(37.5, b.temp + (Math.random() - 0.5) * 0.04));
 
-    // Cada 3-15 min cambia de actividad y de punto de pasto
+    // Cambia de actividad por tramos largos: pastar 8-30 min, caminar 1-5 min, descansar 5-20 min
     if (ahora > b.hastaCambio) {
-      b.act = ['Pastando', 'Pastando', 'Pastando', 'Caminando', 'Descansando'][Math.floor(Math.random() * 5)];
-      b.hastaCambio = ahora + (3 + Math.random() * 12) * 60e3;
-      b.pasto = zona ? puntoAleatorio(zona, enRoja) : null;
+      const x = Math.random();
+      b.act = x < 0.6 ? 'Pastando' : x < 0.85 ? 'Caminando' : 'Descansando';
+      const minutos = b.act === 'Pastando' ? 8 + Math.random() * 22
+        : b.act === 'Caminando' ? 1 + Math.random() * 4 : 5 + Math.random() * 15;
+      b.hastaCambio = ahora + minutos * 60e3;
+      b.pasto = zona && b.act === 'Pastando' ? puntoCerca(b, zona, enRoja) : null;
     }
 
-    let velocidad = b.act === 'Caminando' ? WALK : b.act === 'Pastando' ? GRAZE : 0;
+    let velocidad = b.act === 'Caminando' ? WALK * (0.5 + Math.random() * 0.6)
+      : b.act === 'Pastando' ? GRAZE * (0.3 + Math.random() * 1.2) : 0;
     let quiere;
     let puedeSalir = false;
     let huir = null;
@@ -246,14 +262,16 @@ function simTick() {
       velocidad = WALK;
     } else if (b.pasto) {
       quiere = angulo(b.pasto[0] - b.lat, b.pasto[1] - b.lng);
-      if (Math.hypot(b.pasto[0] - b.lat, b.pasto[1] - b.lng) < 0.00005) b.pasto = puntoAleatorio(zona, enRoja);
+      if (Math.hypot(b.pasto[0] - b.lat, b.pasto[1] - b.lng) < 0.00003) b.pasto = puntoCerca(b, zona, enRoja);
     } else {
       quiere = b.h;
     }
 
-    // Gira poco a poco hacia el rumbo deseado, con algo de azar
+    // Giros suaves: al pastar casi no cambia de rumbo, al caminar gira algo más
+    const maxGiro = b.act === 'Caminando' ? 0.25 : 0.12;
     const giro = normal(quiere - b.h);
-    b.h = normal(b.h + Math.max(-0.2, Math.min(0.2, giro)) + (Math.random() - 0.5) * 0.3);
+    const azar = b.act === 'Caminando' ? 0.3 : 0.5;
+    b.h = normal(b.h + Math.max(-maxGiro, Math.min(maxGiro, giro)) + (Math.random() - 0.5) * azar * 0.2);
 
     if (velocidad > 0) paso(b, velocidad, zona, enRoja, puedeSalir, huir);
     if (b.escaping && zona && !estaDentro(b.lat, b.lng, zona)) b.escaping = false;
