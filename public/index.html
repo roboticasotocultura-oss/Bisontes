@@ -82,8 +82,6 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
     <div class="chart-box"><canvas id="cTemp"></canvas></div>
     <p class="cap">Actividad (minutos)</p>
     <div class="chart-box"><canvas id="cAct"></canvas></div>
-    <p class="cap">Minutos en zona prohibida, por hora</p>
-    <div class="chart-box"><canvas id="cRoja"></canvas></div>
     <p class="cap">m² pisados acumulados</p>
     <div class="chart-box"><canvas id="cM2"></canvas></div>
 
@@ -94,8 +92,6 @@ h2{font-size:14px;font-weight:500;margin:16px 0 8px;color:var(--muted)}
     <div class="chart-box"><canvas id="cZona"></canvas></div>
     <p class="cap">Batería actual por bisonte (%)</p>
     <div class="chart-box"><canvas id="cBatAll"></canvas></div>
-    <p class="cap">Minutos en zona prohibida, por hora (todos)</p>
-    <div class="chart-box"><canvas id="cRojaGen"></canvas></div>
     <p class="cap">m² pisados acumulados (todos)</p>
     <div class="chart-box"><canvas id="cM2Gen"></canvas></div>
 
@@ -238,7 +234,7 @@ function fmtTiempo(min) {
   return m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : m + ' min';
 }
 
-function renderStats(s) {
+function renderStats(s, se) {
   const act = Object.entries(s.actividad).sort((x, y) => y[1] - x[1]);
   const actHtml = act.length
     ? act.map(([k, v]) => '<p style="padding-left:12px"><span class="k">' + k + '</span><span>' + fmtTiempo(v) + '</span></p>').join('')
@@ -250,12 +246,13 @@ function renderStats(s) {
     '<p><span class="k">Batería mín / máx</span><span>' + (s.bateriaMin == null ? '-' : Math.round(s.bateriaMin) + '% / ' + Math.round(s.bateriaMax) + '%') + '</span></p>' +
     '<p><span class="k">Temperatura media</span><span>' + (s.temperaturaMedia ?? '-') + ' °C</span></p>' +
     '<p><span class="k">Tiempo en funcionamiento</span><span>' + fmtTiempo(s.minutosFuncionando) + '</span></p>' +
-    '<p><span class="k">Actividad</span></p>' + actHtml;
+    '<p><span class="k">Actividad</span></p>' + actHtml +
+    '<p><span class="k">Minutos en zona prohibida, por hora</span></p>' + listaRojaPorHora(se || []);
 }
 
 // ----- Gráficas -----
-let chBat = null, chTemp = null, chAct = null, chRoja = null, chM2 = null;
-let chDist = null, chZona = null, chBatAll = null, chRojaGen = null, chM2Gen = null;
+let chBat = null, chTemp = null, chAct = null, chM2 = null;
+let chDist = null, chZona = null, chBatAll = null, chM2Gen = null;
 const baseOpts = {responsive: true, maintainAspectRatio: false, animation: false, plugins: {legend: {display: false}}};
 const tick = {ticks: {font: {size: 10}, maxTicksLimit: 6}};
 const tickSm = {ticks: {font: {size: 10}}};
@@ -281,8 +278,6 @@ function initCharts() {
     data: {labels: [], datasets: [{data: [], backgroundColor: ['#97C459', '#E8B04B', '#85B7EB', '#AFA9EC', '#F09595']}]},
     options: {...baseOpts, plugins: {legend: {display: true, position: 'right', labels: {boxWidth: 10, font: {size: 11}}}}}
   });
-  chRoja = bars('cRoja', [{data: [], backgroundColor: COLOR_BAD}]);
-  chRojaGen = bars('cRojaGen', [{data: [], backgroundColor: COLOR_BAD}]);
   chDist = bars('cDist', [{data: [], backgroundColor: COLOR_OK}]);
   chBatAll = bars('cBatAll', [{data: [], backgroundColor: '#97C459'}]);
   chZona = bars('cZona', [
@@ -294,47 +289,60 @@ function initCharts() {
 const avg = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : null;
 const hhmm = ts => new Date(ts).toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
 
-// Ventana fija de 24 h en tramos de 15 min: las gráficas siempre muestran el día completo
-function ventana() {
-  const s0 = Math.floor((Date.now() - 24 * 3600e3) / SLOT) * SLOT;
-  return {s0, labels: Array.from({length: 96}, (_, i) => hhmm(s0 + i * SLOT))};
+// Las gráficas empiezan en el primer dato y crecen hacia la derecha, en tramos de 1 minuto
+const MIN = 60e3;
+function ventana(rows) {
+  const ahora = Date.now();
+  let inicio = ahora - 24 * 3600e3;
+  if (rows && rows.length) inicio = Math.max(inicio, rows[0].ts);
+  const s0 = Math.floor(inicio / MIN) * MIN;
+  const n = Math.max(1, Math.ceil((ahora - s0) / MIN));
+  return {s0, n};
 }
 
 function porTramos(rows) {
-  const {s0} = ventana();
-  const b = Array.from({length: 96}, () => ({b: [], t: []}));
+  const {s0, n} = ventana(rows);
+  const b = Array.from({length: n}, () => ({b: [], t: []}));
   for (const r of rows) {
-    const i = Math.floor((r.ts - s0) / SLOT);
-    if (i < 0 || i >= 96) continue;
+    const i = Math.floor((r.ts - s0) / MIN);
+    if (i < 0 || i >= n) continue;
     if (r.bateria != null) b[i].b.push(r.bateria);
     if (r.temperatura != null) b[i].t.push(r.temperatura);
   }
-  return {bat: b.map(x => avg(x.b)), temp: b.map(x => avg(x.t))};
+  return {
+    labels: b.map((_, i) => hhmm(s0 + i * MIN)),
+    bat: b.map(x => avg(x.b)),
+    temp: b.map(x => avg(x.t))
+  };
 }
 
 // Serie de 24 barras (una por hora) a partir del servidor
-function setSerie(chRojaC, chM2C, s) {
-  const labels = s.map(x => hhmm(x.ts));
-  chRojaC.data.labels = labels;
-  chRojaC.data.datasets[0].data = s.map(x => x.prohibidaMin);
-  chRojaC.update();
-  chM2C.data.labels = labels;
-  chM2C.data.datasets[0].data = s.map(x => x.m2);
+function setM2(chM2C, s) {
+  const primera = s.findIndex(x => x.m2 > 0);
+  const datos = primera < 0 ? [] : s.slice(primera);
+  chM2C.data.labels = datos.map(x => hhmm(x.ts));
+  chM2C.data.datasets[0].data = datos.map(x => x.m2);
   chM2C.update();
+}
+
+// Lista de minutos en zona prohibida por hora (solo horas con datos)
+function listaRojaPorHora(s) {
+  const filas = s.filter(x => x.prohibidaMin > 0)
+    .map(x => '<p style="padding-left:12px"><span class="k">' + hhmm(x.ts) + '</span><span>' + x.prohibidaMin + ' min</span></p>');
+  return filas.length ? filas.join('') : '<p style="padding-left:12px"><span class="k">Sin entradas</span><span>-</span></p>';
 }
 
 function updateSelCharts(id, h, s, se) {
   if (!chBat) return;
   $('selTitle').textContent = 'Gráficas del bisonte ' + id + ' (24 h)';
-  const {labels} = ventana();
   const t = porTramos(h);
-  chBat.data.labels = labels; chBat.data.datasets[0].data = t.bat; chBat.update();
-  chTemp.data.labels = labels; chTemp.data.datasets[0].data = t.temp; chTemp.update();
+  chBat.data.labels = t.labels; chBat.data.datasets[0].data = t.bat; chBat.update();
+  chTemp.data.labels = t.labels; chTemp.data.datasets[0].data = t.temp; chTemp.update();
   const act = Object.entries(s.actividad);
   chAct.data.labels = act.map(x => x[0]);
   chAct.data.datasets[0].data = act.map(x => x[1]);
   chAct.update();
-  setSerie(chRoja, chM2, se);
+  setM2(chM2, se);
 }
 
 async function loadGeneral() {
@@ -354,7 +362,7 @@ async function loadGeneral() {
   chZona.data.datasets[0].data = ok.map(r => r.s.minutosDentro);
   chZona.data.datasets[1].data = ok.map(r => r.s.minutosFuera);
   chZona.update();
-  setSerie(chRojaGen, chM2Gen, se);
+  setM2(chM2Gen, se);
 }
 
 function updateBatAll() {
@@ -383,7 +391,7 @@ async function loadTrailAndStats(id) {
     api('/api/serie?animal=' + id)
   ]);
   dibujaRecorrido(id, h);
-  renderStats(s);
+  renderStats(s, se);
   updateSelCharts(id, h, s, se);
 }
 
