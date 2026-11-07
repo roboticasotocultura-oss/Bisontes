@@ -120,6 +120,7 @@ setTimeout(() => map.invalidateSize(), 100);
 window.addEventListener('resize', () => map.invalidateSize());
 
 const $ = id => document.getElementById(id);
+const nombre = id => id === 6 ? 'Arduino' : 'Bisonte ' + id;
 const api = async (url, opt) => {
   const r = await fetch(url, opt);
   if (!r.ok) throw new Error(await r.text());
@@ -190,7 +191,7 @@ function pinIcon(a) {
   const cls = ['pin', enAlerta(a) ? 'alert' : '', selected === a.animal ? 'sel' : ''].join(' ');
   return L.divIcon({
     className: '',
-    html: '<div class="' + cls + '"><img src="/bisonte.png" alt="" onerror="this.remove()"><span>' + a.animal + '</span></div>',
+    html: '<div class="' + cls + '"><img src="/bisonte.png" alt="" onerror="this.remove()"><span>' + (a.animal === 6 ? 'Arduino' : a.animal) + '</span></div>',
     iconSize: [56, 70], iconAnchor: [28, 44]
   });
 }
@@ -208,7 +209,7 @@ function drawProhibidas() {
 function renderList() {
   $('list').innerHTML = animales.map(a =>
     '<div class="cow ' + (enAlerta(a) ? 'alert' : '') + ' ' + (a.animal === selected ? 'sel' : '') + '" onclick="select(' + a.animal + ')">' +
-    '<span><span class="dot"></span>Bisonte ' + a.animal + '</span>' +
+    '<span><span class="dot"></span>' + nombre(a.animal) + '</span>' +
     '<span style="font-size:12px;color:var(--muted)">' + Math.round(a.bateria) + '%</span></div>'
   ).join('') || '<span class="k">Sin bisontes todavía.</span>';
 }
@@ -221,7 +222,7 @@ function renderDetail() {
   const rojaTxt = a.enProhibida ? '<span class="warn">Dentro de zona prohibida</span>'
     : (prohibidas.length ? 'Fuera' : 'Sin zonas prohibidas');
   $('detail').innerHTML =
-    '<p><span class="k">Animal</span><span>Bisonte ' + a.animal + '</span></p>' +
+    '<p><span class="k">Animal</span><span>' + nombre(a.animal) + '</span></p>' +
     '<p><span class="k">Batería</span><span>' + bat + '%</span></p>' +
     '<div class="bar"><i style="width:' + bat + '%;background:' + (bat < 25 ? 'var(--bad)' : 'var(--ok)') + '"></i></div>' +
     '<p><span class="k">Carga</span><span>' + estadoCarga(a.bateria) + '</span></p>' +
@@ -368,7 +369,7 @@ async function loadGeneral() {
     Promise.all(animales.map(a => api('/api/serie?animal=' + a.animal).catch(() => [])))
   ]);
   const ok = res.filter(Boolean);
-  const labels = ok.map(r => 'Bisonte ' + r.id);
+  const labels = ok.map(r => nombre(r.id));
   chDist.data.labels = labels;
   chDist.data.datasets[0].data = ok.map(r => r.s.distanciaKm);
   chDist.update();
@@ -387,7 +388,7 @@ async function loadGeneral() {
 
 function updateBatAll() {
   if (!chBatAll) return;
-  chBatAll.data.labels = animales.map(a => 'Bisonte ' + a.animal);
+  chBatAll.data.labels = animales.map(a => nombre(a.animal));
   chBatAll.data.datasets[0].data = animales.map(a => Math.round(a.bateria));
   chBatAll.update();
 }
@@ -440,18 +441,18 @@ async function poll() {
     animales.forEach(a => {
       const prev = prevDentro[a.animal];
       if (zona && prev === 1 && a.dentro === 0) {
-        addLog('Bisonte ' + a.animal + ' ha salido de la zona. Vibración activada');
-        banner('Bisonte ' + a.animal + ' ha salido de la zona');
+        addLog(nombre(a.animal) + ' ha salido de la zona. Vibración activada');
+        banner(nombre(a.animal) + ' ha salido de la zona');
       }
-      if (zona && prev === 0 && a.dentro === 1) addLog('Bisonte ' + a.animal + ' ha vuelto a la zona');
+      if (zona && prev === 0 && a.dentro === 1) addLog(nombre(a.animal) + ' ha vuelto a la zona');
       prevDentro[a.animal] = a.dentro;
 
       const pp = prevProh[a.animal];
       if (pp === 0 && a.enProhibida) {
-        addLog('Bisonte ' + a.animal + ' ha entrado en una zona prohibida. Vibración activada');
-        banner('Bisonte ' + a.animal + ' en zona prohibida');
+        addLog(nombre(a.animal) + ' ha entrado en una zona prohibida. Vibración activada');
+        banner(nombre(a.animal) + ' en zona prohibida');
       }
-      if (pp === 1 && !a.enProhibida) addLog('Bisonte ' + a.animal + ' ha salido de la zona prohibida');
+      if (pp === 1 && !a.enProhibida) addLog(nombre(a.animal) + ' ha salido de la zona prohibida');
       prevProh[a.animal] = a.enProhibida ? 1 : 0;
 
       if (!markers[a.animal]) {
