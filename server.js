@@ -161,7 +161,7 @@ const CELDA_M2 = 25;
 const WALK = 0.00005;             // paso al caminar (~5 m cada 5 s)
 const GRAZE = 0.00001;            // paso al pastar (~1 m cada 5 s)
 
-const sim = [1, 2, 3, 4, 5, 6].map(id => ({
+const sim = [1, 2, 3, 4, 5].map(id => ({
   id,
   lat: CENTER[0] + (Math.random() - 0.5) * 0.002,
   lng: CENTER[1] + (Math.random() - 0.5) * 0.003,
